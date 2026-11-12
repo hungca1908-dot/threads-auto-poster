@@ -5,6 +5,7 @@ import time
 import re
 import json
 import os
+import random
 import threading
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -201,9 +202,10 @@ st.caption("Tự động chạy ngầm trên máy chủ đám mây kể cả khi
 
 pending_count = sum(1 for p in app_data["posts"] if p.get("status") == "Đang chờ")
 tab_compose, tab_queue = st.tabs(
-    ["✍️ Soạn & Đăng bài", f"📅 Hàng đợi hẹn giờ ({pending_count} đang chờ)"]
+    ["✍️ Soạn & Đăng bài", f"📅 Quản lý hàng đợi ({pending_count} đang chờ)"]
 )
 
+# ================= TAB 1: SOẠN & ĐĂNG BÀI =================
 with tab_compose:
     post_text = st.text_area("Nội dung bài viết", height=140, max_chars=500, placeholder="Bạn đang nghĩ gì?")
 
@@ -215,6 +217,7 @@ with tab_compose:
 
     uploaded_files = []
     raw_urls_input = ""
+    total_available_images = 0
 
     if img_source == "Dán danh sách link ảnh (Hỗ trợ nhiều ảnh)":
         raw_urls_input = st.text_area(
@@ -223,36 +226,66 @@ with tab_compose:
             placeholder="https://i.postimg.cc/anh1.jpg\nhttps://i.postimg.cc/anh2.jpg",
         )
         preview_urls = extract_clean_urls(raw_urls_input)
+        total_available_images = len(preview_urls)
         if preview_urls:
-            st.caption(f"Đã nhận diện **{len(preview_urls)}** ảnh hợp lệ:")
-            cols = st.columns(min(len(preview_urls), 4))
+            st.caption(f"Đã nhận diện **{total_available_images}** ảnh hợp lệ trong kho:")
+            cols = st.columns(min(total_available_images, 4))
             for i, u in enumerate(preview_urls[:8]):
                 cols[i % 4].image(u, use_container_width=True)
 
     elif img_source == "Chọn nhiều ảnh từ máy tính":
         uploaded_files = st.file_uploader(
-            "Chọn tối đa 20 ảnh (JPG, PNG, WEBP)",
+            "Chọn ảnh từ máy/điện thoại (JPG, PNG, WEBP)",
             type=["jpg", "jpeg", "png", "webp"],
             accept_multiple_files=True,
         )
+        total_available_images = len(uploaded_files) if uploaded_files else 0
         if uploaded_files:
-            st.caption(f"Đã chọn **{len(uploaded_files)}** ảnh:")
-            cols = st.columns(min(len(uploaded_files), 4))
+            st.caption(f"Đã chọn **{total_available_images}** ảnh vào kho:")
+            cols = st.columns(min(total_available_images, 4))
             for i, f in enumerate(uploaded_files[:8]):
                 cols[i % 4].image(f, use_container_width=True)
+
+    # TÙY CHỌN CHỌN NGẪU NHIÊN (RANDOM) SỐ LƯỢNG ẢNH (VÍ DỤ: 2/7 HÌNH)
+    use_random_images = False
+    random_pick_count = 2
+    if img_source != "Không dùng ảnh" and total_available_images > 1:
+        with st.container(border=True):
+            use_random_images = st.checkbox(
+                f"🎲 Chọn ngẫu nhiên (Random) một số ảnh từ {total_available_images} ảnh ở trên",
+                value=False,
+            )
+            if use_random_images:
+                max_pick = min(total_available_images, 20)
+                default_pick = min(2, max_pick)
+                random_pick_count = st.slider(
+                    "Số lượng ảnh lấy ngẫu nhiên mỗi lần đăng:",
+                    min_value=1,
+                    max_value=max_pick,
+                    value=default_pick,
+                )
+                st.caption(
+                    f"✨ Hệ thống sẽ bốc ngẫu nhiên **{random_pick_count}/{total_available_images}** hình mỗi lần bạn bấm Đăng hoặc Thêm vào lịch."
+                )
 
     st.divider()
     post_mode = st.radio("Chế độ đăng:", ["Đăng ngay bây giờ", "Hẹn giờ đăng"], horizontal=True)
 
     def resolve_final_image_list() -> list:
         if img_source == "Dán danh sách link ảnh (Hỗ trợ nhiều ảnh)":
-            return extract_clean_urls(raw_urls_input)
+            urls = extract_clean_urls(raw_urls_input)
+            if use_random_images and len(urls) > random_pick_count:
+                return random.sample(urls, random_pick_count)
+            return urls
         elif img_source == "Chọn nhiều ảnh từ máy tính" and uploaded_files:
             if not imgbb_key.strip():
                 raise Exception("Vui lòng nhập ImgBB API Key ở thanh bên trái để upload ảnh từ máy!")
-            if len(uploaded_files) > 20:
+            selected_files = list(uploaded_files)
+            if use_random_images and len(selected_files) > random_pick_count:
+                selected_files = random.sample(selected_files, random_pick_count)
+            if len(selected_files) > 20:
                 raise Exception("Chỉ được chọn tối đa 20 ảnh cho 1 bài viết.")
-            return [upload_to_imgbb(f, imgbb_key) for f in uploaded_files]
+            return [upload_to_imgbb(f, imgbb_key) for f in selected_files]
         return []
 
     if post_mode == "Đăng ngay bây giờ":
@@ -275,16 +308,11 @@ with tab_compose:
     else:
         last_queued_dt, has_queue = get_last_queued_time(app_data["posts"])
 
-        # 1. CHỌN MỐC GỐC ĐỂ TÍNH THỜI GIAN
         anchor_options = ["Giờ hiện tại", "Tự chọn mốc ngày & giờ gốc"]
         if has_queue:
             anchor_options.insert(0, "Bài cuối trong hàng đợi")
 
-        anchor_choice = st.radio(
-            "1️⃣ Chọn mốc thời gian gốc:",
-            anchor_options,
-            horizontal=True,
-        )
+        anchor_choice = st.radio("1️⃣ Chọn mốc thời gian gốc:", anchor_options, horizontal=True)
 
         if anchor_choice == "Bài cuối trong hàng đợi":
             anchor_dt = last_queued_dt
@@ -300,7 +328,6 @@ with tab_compose:
                 anchor_time = st.time_input("Giờ mốc gốc", value=last_queued_dt.time(), key="anchor_time")
             anchor_dt = datetime.combine(anchor_date, anchor_time)
 
-        # 2. CHỌN KHOẢNG CỘNG DỒN TỪ MỐC GỐC
         delay_option = st.radio(
             "2️⃣ Cộng thêm thời gian từ mốc gốc:",
             ["+ 0 phút (Đúng mốc gốc)", "+ 5 phút", "+ 10 phút", "+ 15 phút", "+ 30 phút", "+ 60 phút"],
@@ -361,37 +388,173 @@ with tab_compose:
                     except Exception as e:
                         st.error(str(e))
 
+# ================= TAB 2: QUẢN LÝ HÀNG ĐỢI HẸN GIỜ =================
 with tab_queue:
-    if st.button("🔄 Làm mới trạng thái hàng đợi"):
-        st.rerun()
-
     latest_data = load_data()
-    if not latest_data["posts"]:
+    all_posts = latest_data.get("posts", [])
+
+    cnt_waiting = sum(1 for p in all_posts if p.get("status") == "Đang chờ")
+    cnt_done = sum(1 for p in all_posts if str(p.get("status", "")).startswith("✅"))
+    cnt_err = sum(1 for p in all_posts if str(p.get("status", "")).startswith("❌"))
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("📋 Tổng số bài", len(all_posts))
+    m2.metric("⏳ Đang chờ", cnt_waiting)
+    m3.metric("✅ Đã đăng", cnt_done)
+    m4.metric("❌ Bị lỗi", cnt_err)
+
+    st.markdown("**⚡ Thao tác nhanh:**")
+    b1, b2, b3, b4 = st.columns(4)
+
+    with b1:
+        if st.button("🔄 Làm mới", use_container_width=True):
+            st.rerun()
+
+    with b2:
+        if st.button("🚀 Đăng hết bài chờ", use_container_width=True, disabled=(cnt_waiting == 0)):
+            if not access_token.strip():
+                st.error("Thiếu Threads Access Token!")
+            else:
+                with st.spinner("Đang xuất bản toàn bộ bài đang chờ..."):
+                    for item in latest_data["posts"]:
+                        if item.get("status") == "Đang chờ":
+                            ok, msg = publish_to_threads(user_id, access_token, item["text"], item["image_urls"])
+                            item["status"] = "✅ Đã đăng" if ok else f"❌ Lỗi: {msg}"
+                            save_data(latest_data)
+                            time.sleep(3)
+                st.rerun()
+
+    with b3:
+        if st.button("🧹 Dọn bài đã xong/lỗi", use_container_width=True, disabled=(cnt_done + cnt_err == 0)):
+            latest_data["posts"] = [p for p in latest_data["posts"] if p.get("status") == "Đang chờ"]
+            save_data(latest_data)
+            st.rerun()
+
+    with b4:
+        if st.button("🗑️ Xóa tất cả", use_container_width=True, disabled=(len(all_posts) == 0)):
+            latest_data["posts"] = []
+            save_data(latest_data)
+            st.rerun()
+
+    st.divider()
+
+    filter_status = st.radio(
+        "Lọc hiển thị:",
+        ["Tất cả", "⏳ Đang chờ", "✅ Đã đăng", "❌ Bị lỗi"],
+        horizontal=True,
+    )
+
+    if not all_posts:
         st.info("Chưa có bài viết nào trong hàng đợi.")
     else:
-        st.success("✅ Tiến trình ngầm đang hoạt động. Bạn có thể đóng trình duyệt hoặc tắt máy tính, hệ thống vẫn tự động đăng đúng giờ.")
-        sorted_posts = sorted(enumerate(latest_data["posts"]), key=lambda x: x[1]["run_at"])
+        sorted_posts = sorted(enumerate(all_posts), key=lambda x: x[1]["run_at"])
+        displayed_count = 0
 
         for orig_idx, item in sorted_posts:
+            status = item.get("status", "Đang chờ")
+            if filter_status == "⏳ Đang chờ" and status != "Đang chờ":
+                continue
+            if filter_status == "✅ Đã đăng" and not status.startswith("✅"):
+                continue
+            if filter_status == "❌ Bị lỗi" and not status.startswith("❌"):
+                continue
+
+            displayed_count += 1
             run_at_dt = datetime.fromisoformat(item["run_at"])
+
             with st.container(border=True):
-                col_info, col_action = st.columns([4, 1])
-                with col_info:
-                    time_left = ""
-                    if item["status"] == "Đang chờ":
-                        diff = int((run_at_dt - now_vn()).total_seconds())
-                        if diff > 0:
-                            mins, secs = divmod(diff, 60)
-                            time_left = f" (Còn {mins}p {secs}s)"
-                    st.markdown(
-                        f"**🕒 Thời gian:** `{run_at_dt.strftime('%H:%M:%S - %d/%m/%Y')}`{time_left} | **Trạng thái:** `{item['status']}`"
-                    )
+                time_left = ""
+                if status == "Đang chờ":
+                    diff = int((run_at_dt - now_vn()).total_seconds())
+                    if diff > 0:
+                        hours, rem = divmod(diff, 3600)
+                        mins, secs = divmod(rem, 60)
+                        time_left = f" — *(Còn {hours}h {mins}p {secs}s)*" if hours > 0 else f" — *(Còn {mins}p {secs}s)*"
+                    else:
+                        time_left = " — *(Đang xử lý đăng...)*"
+
+                st.markdown(
+                    f"**#{displayed_count} | 🕒 `{run_at_dt.strftime('%H:%M:%S - %d/%m/%Y')}`**{time_left} | `{status}`"
+                )
+
+                if item.get("text"):
                     st.write(item["text"])
-                    if item["image_urls"]:
-                        st.caption(f"🖼️ Đính kèm {len(item['image_urls'])} ảnh")
-                with col_action:
-                    if st.button("Xóa", key=f"del_{orig_idx}"):
+                else:
+                    st.caption("*(Bài viết chỉ có hình ảnh, không có văn bản)*")
+
+                imgs = item.get("image_urls", [])
+                if imgs:
+                    with st.expander(f"🖼️ Xem {len(imgs)} ảnh đính kèm"):
+                        img_cols = st.columns(min(len(imgs), 4))
+                        for i, u in enumerate(imgs):
+                            img_cols[i % 4].image(u, use_container_width=True)
+
+                c1, c2, c3, c4 = st.columns(4)
+
+                with c1:
+                    if status == "Đang chờ":
+                        if st.button("🚀 Đăng ngay", key=f"pubnow_{orig_idx}", use_container_width=True):
+                            with st.spinner("Đang đăng bài..."):
+                                ok, msg = publish_to_threads(user_id, access_token, item["text"], imgs)
+                                latest_data["posts"][orig_idx]["status"] = "✅ Đã đăng" if ok else f"❌ Lỗi: {msg}"
+                                save_data(latest_data)
+                                st.rerun()
+                    elif status.startswith("❌"):
+                        if st.button("🔄 Thử lại", key=f"retry_{orig_idx}", use_container_width=True):
+                            latest_data["posts"][orig_idx]["status"] = "Đang chờ"
+                            latest_data["posts"][orig_idx]["run_at"] = (now_vn() + timedelta(seconds=15)).isoformat()
+                            save_data(latest_data)
+                            st.rerun()
+
+                with c2:
+                    if status == "Đang chờ":
+                        if st.button("⏩ Dời +15p", key=f"delay15_{orig_idx}", use_container_width=True):
+                            latest_data["posts"][orig_idx]["run_at"] = (run_at_dt + timedelta(minutes=15)).isoformat()
+                            save_data(latest_data)
+                            st.rerun()
+
+                with c3:
+                    if status == "Đang chờ":
+                        edit_key = f"editing_{orig_idx}"
+                        if edit_key not in st.session_state:
+                            st.session_state[edit_key] = False
+                        if st.button("✏️ Sửa bài", key=f"editbtn_{orig_idx}", use_container_width=True):
+                            st.session_state[edit_key] = not st.session_state[edit_key]
+                            st.rerun()
+
+                with c4:
+                    if st.button("🗑️ Xóa", key=f"del_{orig_idx}", use_container_width=True):
                         latest_data["posts"].pop(orig_idx)
                         save_data(latest_data)
                         st.rerun()
-    # & 'C:\Users\LAPTOP\AppData\Local\Programs\Python\Python314\python.exe' -m streamlit run "c:/Users/LAPTOP/OneDrive/Desktop/THREAD TOOL/threads_app.py"
+
+                if status == "Đang chờ" and st.session_state.get(f"editing_{orig_idx}", False):
+                    st.divider()
+                    new_text = st.text_area(
+                        "Sửa nội dung:",
+                        value=item.get("text", ""),
+                        key=f"newtxt_{orig_idx}",
+                        max_chars=500,
+                    )
+                    ec1, ec2 = st.columns(2)
+                    with ec1:
+                        new_date = st.date_input("Sửa ngày:", value=run_at_dt.date(), key=f"newd_{orig_idx}")
+                    with ec2:
+                        new_time = st.time_input("Sửa giờ:", value=run_at_dt.time(), key=f"newt_{orig_idx}")
+
+                    sc1, sc2 = st.columns(2)
+                    with sc1:
+                        if st.button("💾 Lưu thay đổi", key=f"saveedit_{orig_idx}", type="primary", use_container_width=True):
+                            updated_dt = datetime.combine(new_date, new_time)
+                            latest_data["posts"][orig_idx]["text"] = new_text
+                            latest_data["posts"][orig_idx]["run_at"] = updated_dt.isoformat()
+                            save_data(latest_data)
+                            st.session_state[f"editing_{orig_idx}"] = False
+                            st.rerun()
+                    with sc2:
+                        if st.button("Hủy", key=f"canceledit_{orig_idx}", use_container_width=True):
+                            st.session_state[f"editing_{orig_idx}"] = False
+                            st.rerun()
+
+        if displayed_count == 0:
+            st.info(f"Không có bài viết nào ở mục lọc **{filter_status}**.")
