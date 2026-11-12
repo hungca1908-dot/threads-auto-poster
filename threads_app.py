@@ -196,7 +196,7 @@ def get_last_queued_time(posts: list) -> tuple[datetime, bool]:
     return current_vn, False
 
 
-# ================= GIAO DIỆN CHÍNH (GIỮ NGUYÊN TRANG KHI XÓA/SỬA) =================
+# ================= GIAO DIỆN CHÍNH =================
 st.title("🧵 Threads Auto Poster (Cloud 24/7)")
 st.caption("Tự động chạy ngầm trên máy chủ đám mây kể cả khi tắt máy tính")
 
@@ -266,7 +266,6 @@ if st.session_state.active_page == "compose":
             for i, f in enumerate(uploaded_files[:8]):
                 cols[i % 4].image(f, use_container_width=True)
 
-    # TÙY CHỌN CHỌN NGẪU NHIÊN (RANDOM) SỐ LƯỢNG ẢNH (VÍ DỤ: 2/7 HÌNH)
     use_random_images = False
     random_pick_count = 2
     if img_source != "Không dùng ảnh" and total_available_images > 1:
@@ -468,8 +467,9 @@ else:
         st.info("Chưa có bài viết nào trong hàng đợi.")
     else:
         sorted_posts = sorted(enumerate(all_posts), key=lambda x: x[1]["run_at"])
-        displayed_count = 0
 
+        # Lọc danh sách bài sẽ hiển thị
+        visible_posts = []
         for orig_idx, item in sorted_posts:
             status = item.get("status", "Đang chờ")
             if filter_status == "⏳ Đang chờ" and status != "Đang chờ":
@@ -478,8 +478,47 @@ else:
                 continue
             if filter_status == "❌ Bị lỗi" and not status.startswith("❌"):
                 continue
+            visible_posts.append((orig_idx, item))
 
+        # Thanh công cụ tích chọn nhiều bài để xóa hàng loạt
+        if visible_posts:
+            sel_c1, sel_c2, sel_c3 = st.columns([1.2, 1.2, 2.2])
+            with sel_c1:
+                if st.button("☑️ Chọn tất cả", use_container_width=True):
+                    for orig_idx, _ in visible_posts:
+                        st.session_state[f"chk_{orig_idx}"] = True
+                    st.rerun()
+            with sel_c2:
+                if st.button("⬜ Bỏ chọn", use_container_width=True):
+                    for orig_idx, _ in visible_posts:
+                        st.session_state[f"chk_{orig_idx}"] = False
+                    st.rerun()
+
+            selected_indices = [
+                orig_idx for orig_idx, _ in visible_posts if st.session_state.get(f"chk_{orig_idx}", False)
+            ]
+
+            with sel_c3:
+                if st.button(
+                    f"🗑️ Xóa các bài đã chọn ({len(selected_indices)})",
+                    type="primary" if selected_indices else "secondary",
+                    disabled=(len(selected_indices) == 0),
+                    use_container_width=True,
+                ):
+                    latest_data["posts"] = [
+                        p for idx, p in enumerate(latest_data["posts"]) if idx not in selected_indices
+                    ]
+                    # Dọn sạch trạng thái checkbox sau khi xóa
+                    for key in list(st.session_state.keys()):
+                        if key.startswith("chk_"):
+                            del st.session_state[key]
+                    save_data(latest_data)
+                    st.rerun()
+
+        displayed_count = 0
+        for orig_idx, item in visible_posts:
             displayed_count += 1
+            status = item.get("status", "Đang chờ")
             run_at_dt = datetime.fromisoformat(item["run_at"])
 
             with st.container(border=True):
@@ -493,9 +532,14 @@ else:
                     else:
                         time_left = " — *(Đang xử lý đăng...)*"
 
-                st.markdown(
-                    f"**#{displayed_count} | 🕒 `{run_at_dt.strftime('%H:%M:%S - %d/%m/%Y')}`**{time_left} | `{status}`"
-                )
+                # Ô tích chọn nằm ngay góc trái đầu mỗi bài viết
+                hdr_chk, hdr_info = st.columns([0.5, 9.5])
+                with hdr_chk:
+                    st.checkbox("", key=f"chk_{orig_idx}", label_visibility="collapsed")
+                with hdr_info:
+                    st.markdown(
+                        f"**#{displayed_count} | 🕒 `{run_at_dt.strftime('%H:%M:%S - %d/%m/%Y')}`**{time_left} | `{status}`"
+                    )
 
                 if item.get("text"):
                     st.write(item["text"])
@@ -545,6 +589,9 @@ else:
                 with c4:
                     if st.button("🗑️ Xóa", key=f"del_{orig_idx}", use_container_width=True):
                         latest_data["posts"].pop(orig_idx)
+                        for key in list(st.session_state.keys()):
+                            if key.startswith("chk_"):
+                                del st.session_state[key]
                         save_data(latest_data)
                         st.rerun()
 
