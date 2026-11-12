@@ -183,7 +183,7 @@ with st.sidebar:
     st.caption(f"🇻🇳 Giờ hệ thống: **{now_vn().strftime('%H:%M:%S - %d/%m/%Y')}**")
 
 
-def get_base_schedule_time(posts: list) -> tuple[datetime, bool]:
+def get_last_queued_time(posts: list) -> tuple[datetime, bool]:
     current_vn = now_vn()
     pending_times = [
         datetime.fromisoformat(p["run_at"])
@@ -273,35 +273,51 @@ with tab_compose:
                 except Exception as e:
                     st.error(str(e))
     else:
-        base_time, has_queue = get_base_schedule_time(app_data["posts"])
-        stack_mode = True
-        if has_queue:
-            stack_mode = st.checkbox(
-                f"Cộng dồn tiếp vào bài cuối trong hàng đợi (Mốc gốc: {base_time.strftime('%H:%M:%S - %d/%m')})",
-                value=True,
-            )
+        last_queued_dt, has_queue = get_last_queued_time(app_data["posts"])
 
-        delay_option = st.radio(
-            "Chọn mốc thời gian:",
-            ["+ 5 phút", "+ 10 phút", "+ 15 phút", "+ 30 phút", "+ 60 phút", "Tùy chỉnh ngày & giờ"],
+        # 1. CHỌN MỐC GỐC ĐỂ TÍNH THỜI GIAN
+        anchor_options = ["Giờ hiện tại", "Tự chọn mốc ngày & giờ gốc"]
+        if has_queue:
+            anchor_options.insert(0, "Bài cuối trong hàng đợi")
+
+        anchor_choice = st.radio(
+            "1️⃣ Chọn mốc thời gian gốc:",
+            anchor_options,
             horizontal=True,
         )
 
-        minute_map = {"+ 5 phút": 5, "+ 10 phút": 10, "+ 15 phút": 15, "+ 30 phút": 30, "+ 60 phút": 60}
-        custom_date = base_time.date()
-        custom_time = (base_time + timedelta(minutes=5)).time()
-
-        if delay_option == "Tùy chỉnh ngày & giờ":
-            col1, col2 = st.columns(2)
-            with col1:
-                custom_date = st.date_input("Chọn ngày", value=custom_date)
-            with col2:
-                custom_time = st.time_input("Chọn giờ", value=custom_time)
-            preview_run_at = datetime.combine(custom_date, custom_time)
+        if anchor_choice == "Bài cuối trong hàng đợi":
+            anchor_dt = last_queued_dt
+            st.caption(f"📌 Mốc gốc đang lấy theo bài cuối hàng đợi: **{anchor_dt.strftime('%H:%M:%S - %d/%m/%Y')}**")
+        elif anchor_choice == "Giờ hiện tại":
+            anchor_dt = now_vn()
+            st.caption(f"📌 Mốc gốc đang lấy theo giờ hiện tại: **{anchor_dt.strftime('%H:%M:%S - %d/%m/%Y')}**")
         else:
-            anchor = base_time if (has_queue and stack_mode) else now_vn()
-            preview_run_at = anchor + timedelta(minutes=minute_map[delay_option])
+            col_a1, col_a2 = st.columns(2)
+            with col_a1:
+                anchor_date = st.date_input("Ngày mốc gốc", value=last_queued_dt.date(), key="anchor_date")
+            with col_a2:
+                anchor_time = st.time_input("Giờ mốc gốc", value=last_queued_dt.time(), key="anchor_time")
+            anchor_dt = datetime.combine(anchor_date, anchor_time)
 
+        # 2. CHỌN KHOẢNG CỘNG DỒN TỪ MỐC GỐC
+        delay_option = st.radio(
+            "2️⃣ Cộng thêm thời gian từ mốc gốc:",
+            ["+ 0 phút (Đúng mốc gốc)", "+ 5 phút", "+ 10 phút", "+ 15 phút", "+ 30 phút", "+ 60 phút"],
+            index=1,
+            horizontal=True,
+        )
+
+        minute_map = {
+            "+ 0 phút (Đúng mốc gốc)": 0,
+            "+ 5 phút": 5,
+            "+ 10 phút": 10,
+            "+ 15 phút": 15,
+            "+ 30 phút": 30,
+            "+ 60 phút": 60,
+        }
+
+        preview_run_at = anchor_dt + timedelta(minutes=minute_map[delay_option])
         st.info(f"🕒 Thời gian dự kiến xuất bản (Giờ VN): **{preview_run_at.strftime('%H:%M:%S - %d/%m/%Y')}**")
 
         if st.button("⏰ Thêm vào lịch đăng", type="primary", use_container_width=True):
@@ -312,15 +328,19 @@ with tab_compose:
             else:
                 current_vn = now_vn()
                 fresh_data = load_data()
-                if delay_option in minute_map:
-                    latest_base, latest_has_queue = get_base_schedule_time(fresh_data["posts"])
-                    anchor = latest_base if (latest_has_queue and stack_mode) else current_vn
-                    run_at = anchor + timedelta(minutes=minute_map[delay_option])
+
+                if anchor_choice == "Bài cuối trong hàng đợi":
+                    latest_last, latest_has_q = get_last_queued_time(fresh_data["posts"])
+                    final_anchor = latest_last if latest_has_q else current_vn
+                elif anchor_choice == "Giờ hiện tại":
+                    final_anchor = current_vn
                 else:
-                    run_at = datetime.combine(custom_date, custom_time)
+                    final_anchor = anchor_dt
+
+                run_at = final_anchor + timedelta(minutes=minute_map[delay_option])
 
                 if run_at <= current_vn:
-                    st.warning("Thời gian hẹn giờ phải ở trong tương lai!")
+                    st.warning("Thời gian hẹn giờ phải ở trong tương lai! Hãy chỉnh lại mốc gốc hoặc cộng thêm phút.")
                 else:
                     try:
                         with st.spinner("Đang lưu bài viết vào hàng đợi Cloud..."):
@@ -374,5 +394,4 @@ with tab_queue:
                         latest_data["posts"].pop(orig_idx)
                         save_data(latest_data)
                         st.rerun()
-
     # & 'C:\Users\LAPTOP\AppData\Local\Programs\Python\Python314\python.exe' -m streamlit run "c:/Users/LAPTOP/OneDrive/Desktop/THREAD TOOL/threads_app.py"
