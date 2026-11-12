@@ -196,17 +196,37 @@ def get_last_queued_time(posts: list) -> tuple[datetime, bool]:
     return current_vn, False
 
 
-# ================= GIAO DIỆN CHÍNH =================
+# ================= GIAO DIỆN CHÍNH (GIỮ NGUYÊN TRANG KHI XÓA/SỬA) =================
 st.title("🧵 Threads Auto Poster (Cloud 24/7)")
 st.caption("Tự động chạy ngầm trên máy chủ đám mây kể cả khi tắt máy tính")
 
-pending_count = sum(1 for p in app_data["posts"] if p.get("status") == "Đang chờ")
-tab_compose, tab_queue = st.tabs(
-    ["✍️ Soạn & Đăng bài", f"📅 Quản lý hàng đợi ({pending_count} đang chờ)"]
-)
+if "active_page" not in st.session_state:
+    st.session_state.active_page = "compose"
 
-# ================= TAB 1: SOẠN & ĐĂNG BÀI =================
-with tab_compose:
+pending_count = sum(1 for p in app_data["posts"] if p.get("status") == "Đang chờ")
+
+nav_c1, nav_c2 = st.columns(2)
+with nav_c1:
+    if st.button(
+        "✍️ Soạn & Đăng bài",
+        type="primary" if st.session_state.active_page == "compose" else "secondary",
+        use_container_width=True,
+    ):
+        st.session_state.active_page = "compose"
+        st.rerun()
+with nav_c2:
+    if st.button(
+        f"📅 Quản lý hàng đợi ({pending_count} đang chờ)",
+        type="primary" if st.session_state.active_page == "queue" else "secondary",
+        use_container_width=True,
+    ):
+        st.session_state.active_page = "queue"
+        st.rerun()
+
+st.divider()
+
+# ================= TRANG 1: SOẠN & ĐĂNG BÀI =================
+if st.session_state.active_page == "compose":
     post_text = st.text_area("Nội dung bài viết", height=140, max_chars=500, placeholder="Bạn đang nghĩ gì?")
 
     img_source = st.radio(
@@ -388,8 +408,8 @@ with tab_compose:
                     except Exception as e:
                         st.error(str(e))
 
-# ================= TAB 2: QUẢN LÝ HÀNG ĐỢI HẸN GIỜ =================
-with tab_queue:
+# ================= TRANG 2: QUẢN LÝ HÀNG ĐỢI HẸN GIỜ =================
+else:
     latest_data = load_data()
     all_posts = latest_data.get("posts", [])
 
